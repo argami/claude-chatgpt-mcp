@@ -1,52 +1,15 @@
 #!/usr/bin/env node
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-	CallToolRequestSchema,
-	ListToolsRequestSchema,
-	type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import { runAppleScript } from "run-applescript";
 import { run } from "@jxa/run";
 
-// Define the ChatGPT tool
-const CHATGPT_TOOL: Tool = {
-	name: "chatgpt",
-	description: "Interact with the ChatGPT desktop app on macOS",
-	inputSchema: {
-		type: "object",
-		properties: {
-			operation: {
-				type: "string",
-				description: "Operation to perform: 'ask' or 'get_conversations'",
-				enum: ["ask", "get_conversations"],
-			},
-			prompt: {
-				type: "string",
-				description:
-					"The prompt to send to ChatGPT (required for ask operation)",
-			},
-			conversation_id: {
-				type: "string",
-				description:
-					"Optional conversation ID to continue a specific conversation",
-			},
-		},
-		required: ["operation"],
-	},
-};
-
-const server = new Server(
-	{
-		name: "ChatGPT MCP Tool",
-		version: "1.0.0",
-	},
-	{
-		capabilities: {
-			tools: {},
-		},
-	},
-);
+// Create MCP server instance with latest SDK pattern
+const server = new McpServer({
+	name: "ChatGPT MCP Tool",
+	version: "1.1.0",
+});
 
 // Check if ChatGPT app is installed and running
 async function checkChatGPTAccess(): Promise<boolean> {
@@ -95,7 +58,7 @@ async function askChatGPT(
 		};
 
 		const encodedPrompt = encodeForAppleScript(prompt);
-		
+
 		// Save original clipboard content
 		const saveClipboardScript = `
 			set savedClipboard to the clipboard
@@ -103,7 +66,7 @@ async function askChatGPT(
 		`;
 		const originalClipboard = await runAppleScript(saveClipboardScript);
 		const encodedOriginalClipboard = encodeForAppleScript(originalClipboard);
-		
+
 		const script = `
       tell application "ChatGPT"
         activate
@@ -124,15 +87,15 @@ async function askChatGPT(
             keystroke "a" using {command down}
             keystroke (ASCII character 8) -- Delete key
             delay 0.5
-            
+
             -- Set the clipboard to the prompt text
             set the clipboard to "${encodedPrompt}"
-            
+
             -- Paste the prompt and send it
             keystroke "v" using {command down}
             delay 0.5
             keystroke return
-            
+
             -- Wait for the response with dynamic detection
             set maxWaitTime to 120 -- Maximum wait time in seconds
             set waitInterval to 1 -- Check interval in seconds
@@ -140,11 +103,11 @@ async function askChatGPT(
             set previousText to ""
             set stableCount to 0
             set requiredStableChecks to 3 -- Number of consecutive stable checks required
-            
+
             repeat while totalWaitTime < maxWaitTime
               delay waitInterval
               set totalWaitTime to totalWaitTime + waitInterval
-              
+
               -- Get current text
               set frontWin to front window
               set allUIElements to entire contents of frontWin
@@ -156,10 +119,10 @@ async function askChatGPT(
                   end if
                 end try
               end repeat
-              
+
               set AppleScript's text item delimiters to linefeed
               set currentText to conversationText as text
-              
+
               -- Check if text has stabilized (not changing anymore)
               if currentText is equal to previousText then
                 set stableCount to stableCount + 1
@@ -172,7 +135,7 @@ async function askChatGPT(
                 set stableCount to 0
                 set previousText to currentText
               end if
-              
+
               -- Check for response completion indicators
               if currentText contains "▍" then
                 -- ChatGPT is still typing (blinking cursor indicator)
@@ -182,7 +145,7 @@ async function askChatGPT(
                 set stableCount to stableCount + 1
               end if
             end repeat
-            
+
             -- Final check for text content
             if (count of conversationText) = 0 then
               return "No response text found. ChatGPT may still be processing or encountered an error."
@@ -193,7 +156,7 @@ async function askChatGPT(
                 -- Attempt to find the latest response by looking for patterns
                 set AppleScript's text item delimiters to linefeed
                 set fullText to conversationText as text
-                
+
                 -- Look for the prompt in the text to find where the response starts
                 set promptPattern to "${prompt.replace(/"/g, '\\"').replace(/\n/g, ' ')}"
                 if fullText contains promptPattern then
@@ -203,12 +166,12 @@ async function askChatGPT(
                     set responseText to text from (promptPos + (length of promptPattern)) to end of fullText
                   end if
                 end if
-                
+
                 -- If we couldn't find the prompt, return the full text
                 if responseText is "" then
                   set responseText to fullText
                 end if
-                
+
                 return responseText
               on error
                 -- Fallback to returning all text if parsing fails
@@ -220,22 +183,22 @@ async function askChatGPT(
       end tell
     `;
 		const result = await runAppleScript(script);
-		
+
 		// Restore original clipboard content
 		await runAppleScript(`set the clipboard to "${encodedOriginalClipboard}"`);
-		
+
 		// Post-process the result to clean up any UI text that might have been captured
 		let cleanedResult = result
 			.replace(/Regenerate( response)?/g, '')
 			.replace(/Continue generating/g, '')
 			.replace(/▍/g, '')
 			.trim();
-			
+
 		// More context-aware incomplete response detection
-		const isLikelyComplete = 
+		const isLikelyComplete =
 			cleanedResult.length > 50 || // Longer responses are likely complete
-			cleanedResult.endsWith('.') || 
-			cleanedResult.endsWith('!') || 
+			cleanedResult.endsWith('.') ||
+			cleanedResult.endsWith('!') ||
 			cleanedResult.endsWith('?') ||
 			cleanedResult.endsWith(':') ||
 			cleanedResult.endsWith(')') ||
@@ -243,11 +206,11 @@ async function askChatGPT(
 			cleanedResult.endsWith(']') ||
 			cleanedResult.includes('\n\n') || // Multiple paragraphs suggest completeness
 			/^[A-Z].*[.!?]$/.test(cleanedResult); // Complete sentence structure
-			
+
 		if (cleanedResult.length > 0 && !isLikelyComplete) {
 			console.warn("Warning: ChatGPT response may be incomplete");
 		}
-		
+
 		return cleanedResult;
 	} catch (error) {
 		console.error("Error interacting with ChatGPT:", error);
@@ -282,10 +245,10 @@ async function getConversations(): Promise<string[]> {
             if not (exists window 1) then
               return "No ChatGPT window found"
             end if
-            
+
             -- Try to get conversation titles with multiple approaches
             set conversationsList to {}
-            
+
             try
               -- First attempt: try buttons in group 1 of group 1
               if exists group 1 of group 1 of window 1 then
@@ -297,7 +260,7 @@ async function getConversations(): Promise<string[]> {
                   end if
                 end repeat
               end if
-              
+
               -- If we didn't find any conversations, try an alternative approach
               if (count of conversationsList) is 0 then
                 -- Try to find UI elements by accessibility description
@@ -313,7 +276,7 @@ async function getConversations(): Promise<string[]> {
                   end try
                 end repeat
               end if
-              
+
               -- If still no conversations found, return a specific message
               if (count of conversationsList) is 0 then
                 return "No conversations found"
@@ -322,7 +285,7 @@ async function getConversations(): Promise<string[]> {
               -- Return error message for debugging
               return "Error: " & errMsg
             end try
-            
+
             return conversationsList
           end tell
         end tell
@@ -343,7 +306,7 @@ async function getConversations(): Promise<string[]> {
 			console.error(result);
 			throw new Error(result);
 		}
-		
+
 		const conversations = result.split(", ");
 		return conversations;
 	} catch (error) {
@@ -352,105 +315,83 @@ async function getConversations(): Promise<string[]> {
 	}
 }
 
-function isChatGPTArgs(args: unknown): args is {
-	operation: "ask" | "get_conversations";
-	prompt?: string;
-	conversation_id?: string;
-} {
-	if (typeof args !== "object" || args === null) return false;
+// Register the 'ask' tool with Zod validation (2025 best practice)
+server.tool(
+	"chatgpt-ask",
+	"Send a prompt to ChatGPT and get a response",
+	{
+		prompt: z.string().describe("The prompt to send to ChatGPT"),
+		conversation_id: z
+			.string()
+			.optional()
+			.describe("Optional conversation ID to continue a specific conversation"),
+	},
+	async ({ prompt, conversation_id }) => {
+		try {
+			const response = await askChatGPT(prompt, conversation_id);
+			return {
+				content: [
+					{
+						type: "text",
+						text: response || "No response received from ChatGPT.",
+					},
+				],
+			};
+		} catch (error) {
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+					},
+				],
+				isError: true,
+			};
+		}
+	},
+);
 
-	const { operation, prompt, conversation_id } = args as any;
+// Register the 'get_conversations' tool with Zod validation
+server.tool(
+	"chatgpt-conversations",
+	"Get a list of available ChatGPT conversations",
+	{},
+	async () => {
+		try {
+			const conversations = await getConversations();
+			return {
+				content: [
+					{
+						type: "text",
+						text:
+							conversations.length > 0
+								? `Found ${conversations.length} conversation(s):\n\n${conversations.join("\n")}`
+								: "No conversations found in ChatGPT.",
+					},
+				],
+			};
+		} catch (error) {
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+					},
+				],
+				isError: true,
+			};
+		}
+	},
+);
 
-	if (!operation || !["ask", "get_conversations"].includes(operation)) {
-		return false;
-	}
-
-	// Validate required fields based on operation
-	if (operation === "ask" && !prompt) return false;
-
-	// Validate field types if present
-	if (prompt && typeof prompt !== "string") return false;
-	if (conversation_id && typeof conversation_id !== "string") return false;
-
-	return true;
+// Start the server
+async function main() {
+	const transport = new StdioServerTransport();
+	await server.connect(transport);
+	console.error("ChatGPT MCP Server running on stdio");
 }
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-	tools: [CHATGPT_TOOL],
-}));
-
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-	try {
-		const { name, arguments: args } = request.params;
-
-		if (!args) {
-			throw new Error("No arguments provided");
-		}
-
-		if (name === "chatgpt") {
-			if (!isChatGPTArgs(args)) {
-				throw new Error("Invalid arguments for ChatGPT tool");
-			}
-
-			switch (args.operation) {
-				case "ask": {
-					if (!args.prompt) {
-						throw new Error("Prompt is required for ask operation");
-					}
-
-					const response = await askChatGPT(args.prompt, args.conversation_id);
-
-					return {
-						content: [
-							{
-								type: "text",
-								text: response || "No response received from ChatGPT.",
-							},
-						],
-						isError: false,
-					};
-				}
-
-				case "get_conversations": {
-					const conversations = await getConversations();
-
-					return {
-						content: [
-							{
-								type: "text",
-								text:
-									conversations.length > 0
-										? `Found ${conversations.length} conversation(s):\n\n${conversations.join("\n")}`
-										: "No conversations found in ChatGPT.",
-							},
-						],
-						isError: false,
-					};
-				}
-
-				default:
-					throw new Error(`Unknown operation: ${args.operation}`);
-			}
-		}
-
-		return {
-			content: [{ type: "text", text: `Unknown tool: ${name}` }],
-			isError: true,
-		};
-	} catch (error) {
-		return {
-			content: [
-				{
-					type: "text",
-					text: `Error: ${error instanceof Error ? error.message : String(error)}`,
-				},
-			],
-			isError: true,
-		};
-	}
+main().catch((error) => {
+	console.error("Fatal error starting server:", error);
+	process.exit(1);
 });
-
-const transport = new StdioServerTransport();
-
-await server.connect(transport);
-console.error("ChatGPT MCP Server running on stdio");

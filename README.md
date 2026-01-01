@@ -103,6 +103,22 @@ If the tool isn't working properly:
 3. Check that you've granted all necessary permissions
 4. Try restarting both Claude and ChatGPT apps
 
+## Recent Updates (v1.1.0 - November 2025)
+
+### MCP SDK Modernization
+- **Updated to MCP SDK 1.22.0**: Upgraded from legacy 1.5.0 to latest November 2025 version
+- **McpServer Pattern**: Migrated from old Server class to modern McpServer pattern
+- **Zod Validation**: Added Zod 3.x for runtime type validation and compile-time type safety
+- **Structured Tool Outputs**: Implemented June 2025 MCP specification standards
+- **Improved Type Safety**: Enhanced TypeScript types and error handling throughout
+
+### API Changes
+The tool now provides two separate tools instead of a single combined tool:
+- `chatgpt-ask`: Send prompts to ChatGPT and get responses
+- `chatgpt-conversations`: List available ChatGPT conversations
+
+This separation improves clarity and follows MCP best practices for tool design.
+
 ## Optimizations
 
 This fork includes several significant improvements to the original implementation:
